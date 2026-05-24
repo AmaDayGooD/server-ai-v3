@@ -4,97 +4,111 @@ import numpy as np
 from shapely.geometry import Polygon
 from ultralytics import YOLO
 
-# =====================================================
+# ==========================================
 # SETTINGS
-# =====================================================
+# ==========================================
 
 MODEL_PATH = "runs/obb/parking_obb/weights/best.pt"
 PARKING_MAP_PATH = "parking_map.json"
-IMAGE_PATH = "test2.jpg"
 
 OCCUPANCY_THRESHOLD = 0.3
 
-# =====================================================
+# ==========================================
 # LOAD MODEL
-# =====================================================
+# ==========================================
 
 model = YOLO(MODEL_PATH)
 
-# =====================================================
-# LOAD IMAGE
-# =====================================================
-
-image = cv2.imread(IMAGE_PATH)
-
-if image is None:
-    raise Exception(f"Cannot load image: {IMAGE_PATH}")
-
-# =====================================================
+# ==========================================
 # LOAD PARKING MAP
-# =====================================================
+# ==========================================
 
 with open(PARKING_MAP_PATH, "r") as f:
     parking_slots = json.load(f)
 
-# =====================================================
-# DETECT VEHICLES
-# =====================================================
+# ==========================================
+# MAIN FUNCTION
+# ==========================================
 
-results = model(IMAGE_PATH)
+def detect_parking(image):
 
-vehicle_polygons = []
+    draw_image = image.copy()
 
-for result in results:
-    if result.obb is None:
-        continue
+    results = model(image)
 
-    boxes = result.obb.xyxyxyxy.cpu().numpy()
+    vehicle_polygons = []
 
-    for box in boxes:
-        pts = np.array(box, dtype=np.int32)
-        vehicle_polygons.append(Polygon(pts))
+    # ======================================
+    # VEHICLES
+    # ======================================
 
-# =====================================================
-# DRAW ONLY FREE PARKING SLOTS
-# =====================================================
+    for result in results:
 
-for slot_data in parking_slots:
+        if result.obb is None:
+            continue
 
-    slot_pts = np.array(slot_data["points"], dtype=np.int32)
-    slot_polygon = Polygon(slot_pts)
+        boxes = result.obb.xyxyxyxy.cpu().numpy()
 
-    occupied = False
+        for box in boxes:
 
-    slot_area = slot_polygon.area
+            pts = np.array(box, dtype=np.int32)
 
-    for vehicle_polygon in vehicle_polygons:
+            vehicle_polygons.append(
+                Polygon(pts)
+            )
 
-        intersection = slot_polygon.intersection(vehicle_polygon).area
+    # ======================================
+    # PARKING ANALYSIS
+    # ======================================
 
-        if slot_area > 0:
+    free_count = 0
+    occupied_count = 0
+
+    for slot_data in parking_slots:
+
+        slot_pts = np.array(
+            slot_data["points"],
+            dtype=np.int32
+        )
+
+        slot_polygon = Polygon(slot_pts)
+
+        occupied = False
+
+        for vehicle_polygon in vehicle_polygons:
+
+            intersection = slot_polygon.intersection(
+                vehicle_polygon
+            ).area
+
+            slot_area = slot_polygon.area
+
+            if slot_area == 0:
+                continue
+
             overlap_ratio = intersection / slot_area
+
             if overlap_ratio > OCCUPANCY_THRESHOLD:
                 occupied = True
                 break
 
-    # ❗ РИСУЕМ ТОЛЬКО СВОБОДНЫЕ
-    if not occupied:
-        cv2.polylines(
-            image,
-            [slot_pts],
-            isClosed=True,
-            color=(0, 255, 0),  # GREEN = FREE
-            thickness=2
-        )
+        # ==================================
+        # DRAW ONLY FREE
+        # ==================================
 
-# =====================================================
-# SAVE + SHOW
-# =====================================================
+        if not occupied:
 
-cv2.imwrite("occupancy_result.jpg", image)
+            free_count += 1
 
-print("Saved: occupancy_result.jpg")
+            cv2.polylines(
+                draw_image,
+                [slot_pts],
+                isClosed=True,
+                color=(0,255,0),
+                thickness=2
+            )
 
-cv2.imshow("Free Parking Slots", image)
-cv2.waitKey(0)
-cv2.destroyAllWindows()
+        else:
+            occupied_count += 1
+
+    return draw_image, free_count, occupied_count
